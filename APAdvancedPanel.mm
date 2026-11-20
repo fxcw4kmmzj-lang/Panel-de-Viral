@@ -4,6 +4,10 @@
 //
 //  Copyright (c) 2026 Sotos. All rights reserved. See LICENSE.
 //
+//  This file compiles with or without ARC: the CMake target does not pass
+//  -fobjc-arc, so the ARC-only constructs (__weak, __bridge) are behind
+//  __has_feature(objc_arc) guards.
+//
 
 #import "APAdvancedPanel.h"
 #include "advanced_panel.h"
@@ -12,8 +16,36 @@ static NSString *APStringOrEmpty(const char *s) {
     return s ? [NSString stringWithUTF8String:s] : @"";
 }
 
+// __bridge is an ARC keyword; under manual retain/release the cast is plain.
+#if __has_feature(objc_arc)
+#  define AP_BRIDGE_TO_OBJECT(x) ((__bridge id)(x))
+#  define AP_BRIDGE_TO_VOID(x)   ((__bridge void *)(x))
+#else
+#  define AP_BRIDGE_TO_OBJECT(x) ((id)(x))
+#  define AP_BRIDGE_TO_VOID(x)   ((void *)(x))
+#endif
+
+// The handler ivar is @private, so the C callback below cannot read it
+// directly. It calls this method instead.
+@interface APAdvancedPanel ()
+- (void)ap_deliverEventTab:(const char *)tabID
+                    widget:(const char *)widgetID
+                      kind:(NSInteger)kind
+                     value:(double)value;
+@end
+
+static void APEventTrampoline(void *user,
+                              const char *tabID,
+                              const char *widgetID,
+                              APEventKind kind,
+                              double value) {
+    APAdvancedPanel *panel = AP_BRIDGE_TO_OBJECT(user);
+    if (!panel) return;
+    [panel ap_deliverEventTab:tabID widget:widgetID kind:(NSInteger)kind value:value];
+}
+
 @implementation APAdvancedPanel {
-    APContext *_ctx;
+    APContext    *_ctx;
     APEventBlock _handler;
 }
 
@@ -32,22 +64,15 @@ static NSString *APStringOrEmpty(const char *s) {
     cfg.author  = author.UTF8String;
     cfg.width   = (int)width;
     cfg.height  = (int)height;
-    cfg.theme   = (theme == APThemeLight) ? AP_THEME_LIGHT : AP_THEME_DARK;
+    cfg.theme   = (theme == AP_THEME_LIGHT) ? AP_THEME_LIGHT : AP_THEME_DARK;
     cfg.flags   = 0;
 
     _ctx = ap_create(&cfg);
     if (!_ctx) return nil;
 
-    __weak APAdvancedPanel *weakSelf = self;
-    ap_set_callback(_ctx, [](void *user, const char *tabID, const char *widgetID,
-                             APEventKind kind, double value) {
-        APAdvancedPanel *panel = (__bridge APAdvancedPanel *)user;
-        if (!panel) return;
-        APEventBlock block = panel->_handler;
-        if (!block) return;
-        (void)weakSelf;
-        block(APStringOrEmpty(tabID), APStringOrEmpty(widgetID), (NSInteger)kind, value);
-    }, (__bridge void *)self);
+    // The context only borrows `self`; it never retains it, and it is
+    // destroyed in -dealloc before self goes away.
+    ap_set_callback(_ctx, APEventTrampoline, AP_BRIDGE_TO_VOID(self));
 
     _title   = [title copy];
     _version = [version copy];
@@ -56,9 +81,22 @@ static NSString *APStringOrEmpty(const char *s) {
 
 - (void)dealloc {
     if (_ctx) {
+        ap_set_callback(_ctx, NULL, NULL);
         ap_destroy(_ctx);
         _ctx = NULL;
     }
+#if !__has_feature(objc_arc)
+    [super dealloc];
+#endif
+}
+
+- (void)ap_deliverEventTab:(const char *)tabID
+                    widget:(const char *)widgetID
+                      kind:(NSInteger)kind
+                     value:(double)value {
+    APEventBlock block = _handler;
+    if (!block) return;
+    block(APStringOrEmpty(tabID), APStringOrEmpty(widgetID), kind, value);
 }
 
 - (NSInteger)tabCount { return _ctx ? ap_tab_count(_ctx) : 0; }
