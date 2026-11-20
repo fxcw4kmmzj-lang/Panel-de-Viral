@@ -6,20 +6,20 @@
 //
 
 #import <Foundation/Foundation.h>
+#import "advanced_panel.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
-typedef NS_ENUM(NSInteger, APTheme) {
-    APThemeDark  = 0,
-    APThemeLight = 1,
-};
-
-typedef NS_ENUM(NSInteger, APWidgetKind) {
-    APWidgetKindToggle = 0,
-    APWidgetKindSlider = 1,
-    APWidgetKindButton = 2,
-    APWidgetKindLabel  = 3,
-};
+// APTheme and APWidgetKind are declared once, in advanced_panel.h.
+// Defining them here as NS_ENUM would be a second declaration of the same
+// enum with a different underlying type, which clang rejects.
+// These aliases keep the Objective-C spelling working at call sites.
+#define APThemeDark         AP_THEME_DARK
+#define APThemeLight        AP_THEME_LIGHT
+#define APWidgetKindToggle  AP_WIDGET_TOGGLE
+#define APWidgetKindSlider  AP_WIDGET_SLIDER
+#define APWidgetKindButton  AP_WIDGET_BUTTON
+#define APWidgetKindLabel   AP_WIDGET_LABEL
 
 typedef void (^APEventBlock)(NSString *tabID, NSString *widgetID, NSInteger kind, double value);
 
